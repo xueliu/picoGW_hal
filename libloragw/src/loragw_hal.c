@@ -225,11 +225,18 @@ int load_firmware(uint8_t target, uint8_t *firmware, uint16_t size) {
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
+uint8_t lgwx_device_mode = 0;
+uint8_t lgwx_beacon_len = 0;
+uint8_t lgwx_beacon_sf = 0;
+uint8_t lgwx_lbt_mode = 0;
+
 void lgw_constant_adjust(void) {
 
     /* I/Q path setup */
     // lgw_reg_w(LGW_RX_INVERT_IQ,0); /* default 0 */
     // lgw_reg_w(LGW_MODEM_INVERT_IQ,1); /* default 1 */
+    if( lgwx_device_mode )
+        lgw_reg_w(LGW_MODEM_INVERT_IQ,0);
     // lgw_reg_w(LGW_CHIRP_INVERT_RX,1); /* default 1 */
     // lgw_reg_w(LGW_RX_EDGE_SELECT,0); /* default 0 */
     // lgw_reg_w(LGW_MBWSSF_MODEM_INVERT_IQ,0); /* default 0 */
@@ -279,6 +286,8 @@ void lgw_constant_adjust(void) {
 
     // lgw_reg_w(LGW_PREAMBLE_FINE_TIMING_GAIN,1); /* default 1 */
     // lgw_reg_w(LGW_ONLY_CRC_EN,1); /* default 1 */
+    if( lgwx_device_mode )
+        lgw_reg_w(LGW_ONLY_CRC_EN,0);
     // lgw_reg_w(LGW_PAYLOAD_FINE_TIMING_GAIN,2); /* default 2 */
     // lgw_reg_w(LGW_TRACKING_INTEGRAL,0); /* default 0 */
     // lgw_reg_w(LGW_ADJUST_MODEM_START_OFFSET_RDX8,0); /* default 0 */
@@ -299,10 +308,23 @@ void lgw_constant_adjust(void) {
         lgw_reg_w(LGW_MBWSSF_FRAME_SYNCH_PEAK2_POS, 2); /* default 2 */
     }
     // lgw_reg_w(LGW_MBWSSF_ONLY_CRC_EN,1); /* default 1 */
+    if( lgwx_device_mode )
+        lgw_reg_w(LGW_MBWSSF_ONLY_CRC_EN,0);
     // lgw_reg_w(LGW_MBWSSF_PAYLOAD_FINE_TIMING_GAIN,2); /* default 2 */
     // lgw_reg_w(LGW_MBWSSF_PREAMBLE_FINE_TIMING_GAIN,1); /* default 1 */
     // lgw_reg_w(LGW_MBWSSF_TRACKING_INTEGRAL,0); /* default 0 */
     // lgw_reg_w(LGW_MBWSSF_AGC_FREEZE_ON_DETECT,1); /* default 1 */
+
+    if( lgwx_device_mode && lgwx_beacon_len ) {
+        lgw_reg_w(LGW_MBWSSF_MODEM_INVERT_IQ,0);
+        lgw_reg_w(LGW_MBWSSF_RATE_SF, lgwx_beacon_sf);
+        lgw_reg_w(LGW_MBWSSF_IMPLICIT_HEADER,1); /* no header */
+        lgw_reg_w(LGW_MBWSSF_IMPLICIT_CRC_EN,0);
+        lgw_reg_w(LGW_MBWSSF_IMPLICIT_CODING_RATE,1);
+        lgw_reg_w(LGW_MBWSSF_IMPLICIT_PAYLOAD_LENGHT, lgwx_beacon_len);
+    } else {
+        lgw_reg_w(LGW_MBWSSF_MODEM_INVERT_IQ,1); //XXX:? correct?
+    }
 
     /* Improvement of reference clock frequency error tolerance */
     lgw_reg_w(LGW_ADJUST_MODEM_START_OFFSET_RDX4, 1); /* default 0 */
@@ -585,6 +607,11 @@ int lgw_board_setconf(struct lgw_conf_board_s conf) {
 
     /* send configuration to concentrator MCU */
     return lgw_mcu_board_setconf(conf);
+}
+
+int lgw_lbt_setconf (struct lgw_conf_lbt_s conf) {
+    (void) conf;
+    return LGW_HAL_ERROR;
 }
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
@@ -1152,6 +1179,11 @@ int lgw_send(struct lgw_pkt_tx_s pkt_data) {
     } else {
         DEBUG_MSG("ERROR: INVALID TX MODULATION\n");
         return LGW_HAL_ERROR;
+    }
+
+    if( lgwx_device_mode ) {
+        pkt_data.invert_pol = false;
+        pkt_data.no_crc = false;
     }
 
     /* send packet data to concentrator MCU */

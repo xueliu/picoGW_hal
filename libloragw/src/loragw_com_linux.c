@@ -205,6 +205,7 @@ int lgw_com_receive_ans_linux(lgw_com_ans_t *ans, lgw_handle_t handle) {
     size_t cmd_size;
     ssize_t buf_size = 0;
     ssize_t lencheck;
+    int readtries = 0;
 
     /* Initialize variables */
     memset(bufferrx, 0, sizeof bufferrx);
@@ -213,8 +214,17 @@ int lgw_com_receive_ans_linux(lgw_com_ans_t *ans, lgw_handle_t handle) {
     buffer_idx = 0;
     while ((checkcmd_linux(bufferrx[0]) != true) || (buffer_idx < CMD_HEADER_RX_SIZE)) {
         lencheck = read(handle, &bufferrx[buffer_idx], CMD_HEADER_RX_SIZE - buffer_idx);
-        if (lencheck < 0) {
-            DEBUG_PRINTF("WARNING: failed to read from communication bridge (%d - %s), retry...\n", errno, strerror(errno));
+        if (lencheck==0) {
+            // In case of non-blocking IO we may get 0 bytes back
+            if( ++readtries > 4 ) {
+                printf("ERROR: failed to read from communication bridge - no data\n");
+                return LGW_COM_ERROR;
+            }
+            wait_ns_linux(250000);
+        }
+        else if (lencheck < 0) {
+            //DEBUG_PRINTF("WARNING: failed to read from communication bridge (%d - %s), retry...\n", errno, strerror(errno));
+            printf("ERROR: failed to read from communication bridge (%d - %s), retry...\n", errno, strerror(errno));
             return LGW_COM_ERROR;
         }
         buffer_idx += lencheck;
@@ -266,9 +276,7 @@ int lgw_com_receive_ans_linux(lgw_com_ans_t *ans, lgw_handle_t handle) {
 int lgw_com_open_linux(void **com_target_ptr, const char *com_path) {
 
     int *usb_device = NULL;
-    char portname[50];
-    int x;
-    int fd;
+    int fd = -1;
 
     /*check input variables*/
     CHECK_NULL(com_target_ptr);
@@ -280,26 +288,36 @@ int lgw_com_open_linux(void **com_target_ptr, const char *com_path) {
     }
 
     /* open tty port */
-    sprintf(portname, "%s", com_path);
-    fd = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
+    fd = open(com_path, O_RDWR | O_NOCTTY | O_SYNC);
     if (fd < 0) {
-        printf("ERROR: failed to open COM port %s - %s\n", portname, strerror(errno));
+        printf("ERROR: failed to open COM port %s - %s\n", com_path, strerror(errno));
     } else {
-        x = set_interface_attribs_linux(fd, B115200);
-        x |= set_blocking_linux(fd, true);
-        if (x != 0) {
-            printf("ERROR: failed to configure COM port %s\n", portname);
-            free(usb_device);
-            return LGW_COM_ERROR;
+        if( set_interface_attribs_linux(fd, B115200) != LGW_COM_SUCCESS ||
+            set_blocking_linux(fd, false) != LGW_COM_SUCCESS ) {
+            printf("ERROR: failed to configure COM port %s\n", com_path);
+            goto fail;
         }
 
         *usb_device = fd;
         *com_target_ptr = (void*)usb_device;
 
-        return LGW_COM_SUCCESS;
+        uint8_t eui[8];
+        int tries = 0;
+        do {
+            int err = lgw_mcu_get_unique_id(eui);  // NOTE: uses *com_target_ptr!
+            if( err == LGW_MCU_SUCCESS ) {
+                if( set_blocking_linux(fd, true) != LGW_COM_SUCCESS ) {
+                    printf("ERROR: failed to configure COM port %s\n", com_path);
+                    goto fail;
+                }
+                return LGW_COM_SUCCESS;
+            }
+        } while( ++tries < 4 );
     }
-
+  fail:
+    close(fd);
     free(usb_device);
+    *com_target_ptr = NULL;
     return LGW_COM_ERROR;
 }
 
